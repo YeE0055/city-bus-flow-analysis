@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>城市公交客流分析 · 12 个指标汇总</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 24px; background: #f6f8fb; color: #1f2329;
+         font-family: "Microsoft YaHei", system-ui, sans-serif; font-size: 14px; line-height: 1.6; }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 23px; margin: 0 0 6px; font-weight: 600; }
+  .sub { color: #6b7280; margin-bottom: 22px; }
+  .pick { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+          padding: 18px 20px; margin-bottom: 18px; display: flex; align-items: center;
+          gap: 16px; flex-wrap: wrap; box-shadow: 0 1px 3px rgba(16,24,40,.04); }
+  .pick input { font-size: 14px; }
+  .hint { color: #6b7280; font-size: 13px; }
+  .stat { background: #eef4ff; border: 1px solid #c9dcff; border-radius: 12px;
+          padding: 16px 20px; margin-bottom: 16px; }
+  .stat b { font-size: 19px; color: #185fa5; }
+  .bar { height: 6px; background: #dbe7f8; border-radius: 6px; margin-top: 12px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: #3b82c4; border-radius: 6px; }
+  .warn { background: #fff4e5; border: 1px solid #ffd8a8; color: #8a4b00;
+          border-radius: 12px; padding: 13px 20px; margin-bottom: 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 18px 20px;
+          box-shadow: 0 1px 3px rgba(16,24,40,.04); }
+  .card.miss { border-style: dashed; background: #fafbfc; box-shadow: none; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .name { font-weight: 600; font-size: 15px; }
+  .tag { font-size: 12px; color: #185fa5; background: #e6f1fb; border-radius: 20px;
+         padding: 2px 10px; white-space: nowrap; }
+  .num { font-size: 27px; font-weight: 600; color: #185fa5; margin: 10px 0 2px; }
+  .unit { color: #6b7280; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  td { border-top: 1px solid #f0f1f3; padding: 5px 2px; }
+  td:last-child { text-align: right; color: #185fa5; }
+  .foot { color: #9ca3af; font-size: 12px; margin-top: 28px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>城市公共交通刷卡数据 · 客流分析</h1>
+  <div class="sub">4 个人 · 12 个指标。收齐后运行 scripts/run_all.sh，在这里选择生成的 result.csv 查看全部结果。</div>
+
+  <div class="pick">
+    <input type="file" id="file" accept=".csv">
+    <span class="hint">现在显示的是组长已交的 3 个指标，选 result.csv 可换成全组正式结果。</span>
+  </div>
+
+  <div id="msg" class="hint" style="margin-bottom:14px">等待选择文件…</div>
+  <div id="out"></div>
+
+  <div class="foot">数据换成真实刷卡数据后，重跑各自的 SQL 并覆盖 output/ 里的 CSV 即可</div>
+</div>
+
+<script>
+var OWNER = {'01':'组长','02':'组长','08':'组长','03':'组员 1','04':'组员 1','07':'组员 1',
+             '05':'组员 2','06':'组员 2','09':'组员 2','10':'组员 3','11':'组员 3','12':'组员 3'};
+var NAMES = {'01':'日均刷卡量','02':'高峰小时系数','03':'各线路日均客流',
+  '04':'各站点日均客流','05':'工作日/周末客流比','06':'节假日客流变化率',
+  '07':'客流空间集中度','08':'早晚高峰客流比','09':'月度客流趋势斜率',
+  '10':'站点进出比','11':'工作日客流稳定性','12':'累计计数异常率'};
+
+function parse(text) {
+  var lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(function (l) { return l.trim(); });
+  var rows = [];
+  for (var i = 1; i < lines.length; i++) {
+    var c = lines[i].split(',');
+    if (c.length < 4 || !/^[0-9]{2}$/.test(c[0].replace(/["']/g, '').trim())) continue;
+    rows.push({ id: c[0].replace(/["']/g, '').trim(), name: (c[1] || '').replace(/["']/g, ''),
+                key: (c[2] || '').replace(/["']/g, ''), val: (c[3] || '').replace(/["']/g, ''),
+                unit: (c[4] || '').replace(/["']/g, '') });
+  }
+  return rows;
+}
+
+function render(rows, label) {
+  var groups = {}, i;
+  for (i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!groups[r.id]) groups[r.id] = [];
+    groups[r.id].push(r);
+  }
+  var done = Object.keys(groups).length;
+  var html = '<div class="stat">' + label + ' 汇总完成 <b>' + done + ' / 12</b> 个指标，共 ' +
+    rows.length + ' 行结果<div class="bar"><i style="width:' +
+    Math.round(done / 12 * 100) + '%"></i></div></div>';
+
+  var missing = Object.keys(NAMES).filter(function (id) { return !groups[id]; });
+  if (missing.length) {
+    html += '<div class="warn">还缺：' + missing.map(function (id) {
+      return id + ' ' + NAMES[id] + '（' + OWNER[id] + '）'; }).join('、') + '</div>';
+  }
+
+  html += '<div class="grid">';
+  Object.keys(NAMES).forEach(function (id) {
+    var g = groups[id];
+    html += '<div class="card' + (g ? '' : ' miss') + '"><div class="top">' +
+      '<span class="name">' + id + ' · ' + NAMES[id] + '</span>' +
+      '<span class="tag">' + OWNER[id] + '</span></div>';
+    if (!g) {
+      html += '<div class="unit" style="margin-top:12px">还没有结果</div>';
+    } else if (g.length === 1 && g[0].key === '全网') {
+      html += '<div class="num">' + g[0].val + '</div><div class="unit">' + g[0].unit + '</div>';
+    } else {
+      html += '<div class="num" style="font-size:20px">' + g.length + ' 个维度</div>';
+      html += '<table>';
+      g.forEach(function (r) {
+        html += '<tr><td>' + r.key + '</td><td>' + r.val + ' ' + r.unit + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  document.getElementById('out').innerHTML = html;
+}
+
+document.getElementById('file').addEventListener('change', function (e) {
+  var f = e.target.files[0];
+  if (!f) return;
+  var reader = new FileReader();
+  reader.onload = function (ev) {
+    var rows = parse(ev.target.result);
+    if (!rows.length) {
+      document.getElementById('msg').textContent = '没读到指标数据，请确认选的是 result.csv';
+      return;
+    }
+    document.getElementById('msg').textContent = '已读取 ' + f.name + '，下面是全组跑出来的正式结果。';
+    render(rows, '正式结果 ·');
+  };
+  reader.readAsText(f, 'UTF-8');
+});
+
+// 初始只显示组长已经交的 3 个指标，不会假装 12 个都齐了
+var LEADER = [
+  'metric_id,metric_name,dim_key,value,unit',
+  '01,日均刷卡量,全网,51.2472,人次/天',
+  '02,高峰小时系数,全网,0.1805,比例',
+  '08,早晚高峰客流比,全网,1.0879,比例'
+].join('\n');
+document.getElementById('msg').textContent = '当前显示组长已交的 3 个指标；等 4 人交齐后运行 scripts/run_all.sh，再选 result.csv。';
+render(parse(LEADER), '当前进度 ·');
+</script>
+</body>
+</html>
